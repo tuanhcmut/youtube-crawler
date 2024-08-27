@@ -1,221 +1,261 @@
-import json
-import re
+import os
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 import asyncio
 import httpx
-from typing import Dict, Any, List
+from crawler import YoutubeCrawler
+import json 
+import xml.etree.ElementTree as ET
+from html import unescape
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List 
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from urllib.parse import urlparse, parse_qs
 
-# Constants
-YOUTUBE_VIDEO_URL = 'https://www.youtube.com/watch?v={youtube_id}'
-YOUTUBE_CONSENT_URL = 'https://consent.youtube.com/save'
-USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.130 Safari/537.36'
+folder = 'crawled'
+done = False 
+comments_limit = 1000 
+urls = [
+    "https://www.youtube.com/watch?v=JXPitkep4oo"
+]
 
-YT_CFG_RE = r'ytcfg\.set\s*\(\s*({.+?})\s*\)\s*;'
-YT_INITIAL_DATA_RE = r'(?:window\s*\[\s*["\']ytInitialData["\']\s*\]|ytInitialData)\s*=\s*({.+?})\s*;\s*(?:var\s+meta|</script|\n)'
-YT_HIDDEN_INPUT_RE = r'<input\s+type="hidden"\s+name="([A-Za-z0-9_]+)"\s+value="([A-Za-z0-9_\-\.]*)"\s*(?:required|)\s*>'
 
-class YoutubeCrawler:
-    def __init__(self, video_id: str):
-        self.video_id = video_id
-        self.url = 'https://www.youtube.com/youtubei/v1/player'
-        self.headers = {'Content-Type': 'application/json'}
-        self.data = {
-            "context": {
-                "cl": "en",
-                "client": {
-                    "clientName": "WEB",
-                    "clientVersion": "2.20210721.00.00",
-                    "mainAppWebInfo": {
-                        "graftUrl": f"/watch?v={self.video_id}"
-                    }
-                }
-            },
-            "videoId": self.video_id
-        }
-        self.response = None
-        self.ytCfg = None
-        self.ytInitial = None
-        self.session = httpx.AsyncClient()
-        self.session.headers['User-Agent'] = USER_AGENT
-        self.session.cookies.set('CONSENT', 'YES+cb', domain='.youtube.com')
-        self.stop_immediately = False
-        self.all_comments = None
-        
-    async def new_session():
-        self.session = httpx.AsyncClient()
-        self.session.headers['User-Agent'] = USER_AGENT
-        self.session.cookies.set('CONSENT', 'YES+cb', domain='.youtube.com')
+# Ensure the folder exists
+os.makedirs(folder, exist_ok=True)
 
-    async def _fetch_data(self) -> Dict[str, Any]:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(self.url, json=self.data, headers=self.headers)
-            if response.status_code == 200:
-                self.response = response.json()
-                return self.response
-            else:
-                raise httpx.HTTPStatusError(f"Failed to fetch data with status code {response.status_code}")
+crawler_dict = dict()
+status_dict = dict()
 
-    async def get_video_details(self) -> Dict[str, Any]:
-        if not self.response:
-            await self._fetch_data()
-        return self.response.get('videoDetails', {})
+def extract_video_id(url: str) -> str:
+    """
+    Extract the video ID from a YouTube URL.
+    """
+    parsed_url = urlparse(url)
+    query_params = parse_qs(parsed_url.query)
+    return query_params.get('v', [None])[0]
 
-    async def get_captions(self) -> List[Dict[str, Any]]:
-        if not self.response:
-            await self._fetch_data()
-        captions = self.response.get('captions')
-        if captions:
-            return captions.get('playerCaptionsTracklistRenderer', {}).get('captionTracks', [])
-        return []
+async def fetch_xml(url):
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.text
 
-    async def _fetch_and_handle_page(self, youtube_url):
-        response = await self.session.get(youtube_url)
-        if 'consent' in str(response.url):
-            params = dict(re.findall(YT_HIDDEN_INPUT_RE, response.text))
-            params.update({'continue': youtube_url, 'set_eom': False, 'set_ytc': True, 'set_apyt': True})
-            response = await self.session.post(YOUTUBE_CONSENT_URL, params=params)
-
-        html = response.text
-        self.ytCfg = self._regex_search(html, YT_CFG_RE, default='')
-        if not self.ytCfg:
-            raise RuntimeError("Failed to fetch ytcfg")
-        self.ytCfg = json.loads(self.ytCfg)
-
-        self.ytInitial = self._regex_search(html, YT_INITIAL_DATA_RE, default='')
-        if not self.ytInitial:
-            raise RuntimeError("Failed to fetch ytInitialData")
-        self.ytInitial = json.loads(self.ytInitial)
-
-    async def _ajax_request(self, endpoint, retries=5, sleep=20, timeout=60):
-        url = 'https://www.youtube.com' + endpoint['commandMetadata']['webCommandMetadata']['apiUrl']
-        data = {'context': self.ytCfg['INNERTUBE_CONTEXT'],
-                'continuation': endpoint['continuationCommand']['token']}
-        for _ in range(retries):
-            try:
-                response = await self.session.post(url, params={'key': self.ytCfg['INNERTUBE_API_KEY']}, json=data, timeout=timeout)
-                if response.status_code == 200:
-                    return response.json()
-                if response.status_code in [403, 413]:
-                    return {}
-            except httpx.RequestError:
-                pass
-            await asyncio.sleep(sleep)
-        return {}
-
-    async def stop_fetching_comments(self):
-        self.stop_immediately = True
+def caption_to_xml(xml_content):
+    root = ET.fromstring(xml_content)
     
-    def count_fetching_comments(self):
-        return len(self.all_comments) if self.all_comments else 0 
+    for text_element in root.findall('text'):
+        start = float(text_element.get('start'))
+        duration = float(text_element.get('dur'))
+        end = start + duration
+        
+        text_element.set('end', str(end))
+    
+    updated_xml_content = ET.tostring(root, encoding='utf-8').decode('utf-8')
+    return updated_xml_content
 
-    async def get_comments(self, all_comments = [], language=None, sleep=.1, newest_first=False, limit=None):
-        self.all_comments = all_comments
-        youtube_url = YOUTUBE_VIDEO_URL.format(youtube_id=self.video_id)
-        await self._fetch_and_handle_page(youtube_url)
-        self._set_language(language)
-        sort_menu = await self._get_sort_menu()
-        sort_by = 1 if newest_first else 0
+def caption_to_json(xml_content):
+    root = ET.fromstring(xml_content)
+    subtitles = []
+    
+    for text_element in root.findall('text'):
+        start = float(text_element.get('start'))
+        duration = float(text_element.get('dur'))
+        end = start + duration
+        text = text_element.text.strip()
+        
+        subtitles.append({
+            'text': text,
+            'start': start,
+            'dur': duration,
+            'end': end
+        })
+    
+    return subtitles
 
-        if not sort_menu:
-            raise RuntimeError('Failed when getting comments')
+def caption_to_srt(xml_content):
+    root = ET.fromstring(xml_content)
+    subtitles = []
+    index = 1
+    
+    for text_element in root.findall('text'):
+        start = float(text_element.get('start'))
+        duration = float(text_element.get('dur'))
+        end = start + duration
+        text = text_element.text.strip()
+        
+        start_time = f"{int(start // 3600):02}:{int((start % 3600) // 60):02}:{int(start % 60):02},{int((start % 1) * 1000):03}"
+        end_time = f"{int(end // 3600):02}:{int((end % 3600) // 60):02}:{int(end % 60):02},{int((end % 1) * 1000):03}"
+        
+        subtitles.append(f"{index}\n{start_time} --> {end_time}\n{text}\n")
+        index += 1
+    
+    return "\n".join(subtitles)
 
-        continuations = [sort_menu[sort_by]['serviceEndpoint']]
+def save_to_file(content, filename: str):
+    file_path = os.path.join(folder, filename)
+    os.makedirs(folder, exist_ok=True)  # Ensure the folder exists
+    with open(file_path, 'w', encoding='utf-8') as file:
+        file.write(content)
 
-        while continuations:
-            if self.stop_immediately or (limit and len(all_comments) >= limit):
-                break
-            continuation = continuations.pop()
-            response = await self._ajax_request(continuation)
-            if not response:
-                break
-            comments = self._handle_response(response, continuations)
-            will_continue = self._handle_comments(comments, all_comments, limit)
-            if self.stop_immediately or not will_continue:
-                break
-            await asyncio.sleep(sleep)
+def save_to_json(data: dict, filename: str):
+    file_path = os.path.join(folder, filename)
+    os.makedirs(folder, exist_ok=True)  # Ensure the folder exists
+    with open(file_path, 'w') as f:
+        json.dump(data, f, indent=4)
 
-        return all_comments
+def init_status_dict(urls):
+    global status_dict
+    status_dict.clear()
+    for url in urls:
+        video_id = extract_video_id(url)
+        status_dict.setdefault(video_id, {})
 
-    def _set_language(self, language):
-        if language:
-            self.ytCfg['INNERTUBE_CONTEXT']['client']['hl'] = language
+def smaller_details(video_info):
+    result = { 
+        "videoId": video_info.get("videoId"),
+        "title": video_info.get("title"),
+        "lengthSeconds": video_info.get("lengthSeconds"),
+        "channelId": video_info.get("channelId"),
+        "viewCount": video_info.get("viewCount"),
+        "author": video_info.get("author")
+    }
+    return result 
 
-    def _handle_comments(self, comments, all_comments, limit):
-        if limit:
-            while len(all_comments) < limit and comments:
-                all_comments.append(comments.pop())
-            return len(all_comments) < limit
+async def crawl_video_details(downloader, download_captions = True):
+    try:
+        video_id = downloader.video_id
+        video_details = await downloader.get_video_details()
+        global status_dict
+        status_dict.get(video_id).setdefault("details", smaller_details(video_details))
+
+        video_captions = await downloader.get_captions()
+        video_details.setdefault("captions", video_captions)
+        status_dict.get(video_id).setdefault("_captions", len(video_captions))
+        save_to_json(status_dict, "details_" + video_id + ".json")
+        if download_captions:
+            await crawl_video_captions(downloader)
+    except httpx.RequestError:
+        return None
+
+async def crawl_video_caption(video_id, caption, filetype = "srt"):
+    try:
+        url = caption["baseUrl"]
+        languageCode = caption["languageCode"]
+        languageName = caption["name"]["simpleText"]
+
+        xml_content = await fetch_xml(url)
+        xml_content = unescape(xml_content)
+
+        if filetype == "srt":
+            content = caption_to_srt(xml_content)
+            filename = f"{languageCode}_({languageName})_{video_id}.srt"
+            save_to_file(content, filename)
+        elif filetype == "json":
+            content = caption_to_json(xml_content)
+            filename = f"{languageCode}_({languageName})_{video_id}.json"
+            save_to_json(content, filename)
         else:
-            all_comments.extend(comments)
-            return True
+            content = caption_to_xml(xml_content)
+            filename = f"{languageCode}_({languageName})_{video_id}.xml"
+            save_to_file(content, filename)
+        
+    except Exception as e:
+        return None
 
-    async def _get_sort_menu(self):
-        sort_menu = next(self._search_dict(self.ytInitial, 'sortFilterSubMenuRenderer'), {}).get('subMenuItems', [])
-        if not sort_menu:
-            section_list = next(self._search_dict(self.ytInitial, 'sectionListRenderer'), {})
-            continuations = list(self._search_dict(section_list, 'continuationEndpoint'))
-            self.ytInitial = await self._ajax_request(continuations[0]) if continuations else {}
-            sort_menu = next(self._search_dict(self.ytInitial, 'sortFilterSubMenuRenderer'), {}).get('subMenuItems', [])
-        return sort_menu
+async def crawl_video_captions(downloader:YoutubeCrawler):
+    try:
+        video_id = downloader.video_id
+        global status_dict 
+        captions = await downloader.get_captions()
+        tasks = [crawl_video_caption(video_id, caption) for caption in captions]
+        await asyncio.gather(*tasks)
+        status_dict.get(video_id).setdefault("captions",  len(tasks))
 
-    def _handle_response(self, response, continuations):
-        error = next(self._search_dict(response, 'externalErrorMessage'), None)
-        if error:
-            raise RuntimeError(f'Error returned from server: {error}')
+    except httpx.RequestError:
+        return None
 
-        actions = list(self._search_dict(response, 'reloadContinuationItemsCommand')) + \
-                  list(self._search_dict(response, 'appendContinuationItemsAction'))
+async def crawl_video_comments(downloader):
+    try:
+        video_id = downloader.video_id
+        video_comments = []
+        global comments_limit
+        await downloader.get_comments(video_comments, limit = comments_limit)
+        global status_dict
+        status_dict.get(video_id).setdefault("comments", len(video_comments))
+    except httpx.RequestError:
+        return None
 
-        comments = []
-        for action in actions:
-            for item in action.get('continuationItems', []):
-                if action['targetId'] in ['comments-section', 'engagement-panel-comments-section', 'shorts-engagement-panel-comments-section']:
-                    continuations.extend(ep for ep in self._search_dict(item, 'continuationEndpoint'))
-                if action['targetId'].startswith('comment-replies-item') and 'continuationItemRenderer' in item:
-                    button_renderer = next(self._search_dict(item, 'buttonRenderer'), {})
-                    if 'command' in button_renderer:
-                        continuations.append(button_renderer['command'])
+async def fetch_video(url):
+    try:
+        video_id = extract_video_id(url)
+        crawler = YoutubeCrawler(video_id)
+        crawler_dict[video_id] = crawler
+        crawl_details_task = crawl_video_details(crawler)
+        crawl_comments_task = crawl_video_comments(crawler)
+        tasks = [crawl_details_task, crawl_comments_task]
+        results = await asyncio.gather(*tasks)
+        status_dict.get(video_id).setdefault("status", "Done")
+        return results 
+    except httpx.RequestError:
+        return None
 
-        comments.extend(self._parse_comments(response))
-        return comments
+async def start_crawling(urls):
+    init_status_dict(urls)
+    tasks = [fetch_video(url) for url in urls]
+    results = await asyncio.gather(*tasks)
+    global done
+    done = True
 
-    def _parse_comments(self, response):
-        toolbar_states = {payload['key']: payload for payload in self._search_dict(response, 'engagementToolbarStateEntityPayload')}
-        for comment in reversed(list(self._search_dict(response, 'commentEntityPayload'))):
-            properties = comment['properties']
-            cid = properties['commentId']
-            author = comment['author']
-            toolbar = comment['toolbar']
-            toolbar_state = toolbar_states.get(properties['toolbarStateKey'], {})
-            result = {
-                'cid': cid,
-                'vid': self.video_id,
-                'text': properties['content']['content'],
-                'time': properties['publishedTime'],
-                'author': author['displayName'],
-                'channel': author['channelId'],
-                'votes': toolbar['likeCountNotliked'].strip() or "0",
-                'replies': toolbar['replyCount'],
-                'photo': author['avatarThumbnailUrl'],
-                'heart': toolbar_state.get('heartState', '') == 'TOOLBAR_HEART_STATE_HEARTED',
-                'reply': '.' in cid
-            }
-            yield result
 
-    @staticmethod
-    def _regex_search(text, pattern, group=1, default=None):
-        match = re.search(pattern, text)
-        return match.group(group) if match else default
 
-    @staticmethod
-    def _search_dict(partial, search_key):
-        stack = [partial]
-        while stack:
-            current_item = stack.pop()
-            if isinstance(current_item, dict):
-                for key, value in current_item.items():
-                    if key == search_key:
-                        yield value
-                    else:
-                        stack.append(value)
-            elif isinstance(current_item, list):
-                stack.extend(current_item)
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+
+
+@app.on_event("startup")
+async def startup_event():
+    global urls
+    asyncio.create_task(start_crawling(urls))
+
+@app.get("/status")
+async def get_status():
+    global crawler_dict
+    global status_dict
+    for k,v in status_dict.items():
+        if v.get("comments") is None:
+            v["_comments"] = crawler_dict[k].count_fetching_comments()
+        else:
+            try:
+                del v["_comments"]
+            except KeyError:
+                pass
+    return list(status_dict.values())
+
+@app.post("/crawl")
+async def crawl(urls: List[str], limit: int = comments_limit):
+    global done
+    if not done:
+        return None
+    done = False 
+    global comments_limit
+    comments_limit = limit
+    asyncio.create_task(start_crawling(urls))
+    return True
+
+
+@app.get("/")
+async def read_index():
+    return FileResponse("combined.html")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
