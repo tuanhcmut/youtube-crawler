@@ -4,7 +4,6 @@ from fastapi.responses import JSONResponse
 import asyncio
 import httpx
 from crawler import YoutubeCrawler
-from core_functions import extract_video_id
 import json 
 import xml.etree.ElementTree as ET
 from html import unescape
@@ -12,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List 
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
+from urllib.parse import urlparse, parse_qs
 
 folder = 'crawled'
 done = False 
@@ -27,6 +26,14 @@ os.makedirs(folder, exist_ok=True)
 
 crawler_dict = dict()
 status_dict = dict()
+
+def extract_video_id(url: str) -> str:
+    """
+    Extract the video ID from a YouTube URL.
+    """
+    parsed_url = urlparse(url)
+    query_params = parse_qs(parsed_url.query)
+    return query_params.get('v', [None])[0]
 
 async def fetch_xml(url):
     async with httpx.AsyncClient() as client:
