@@ -6,6 +6,26 @@ The YouTube Data Crawler API is a FastAPI application designed to interact with 
 
 The core functionality for crawling YouTube data is encapsulated in the `YoutubeCrawler` class, located in `crawler.py`. This class handles the retrieval of video details, captions, and comments using YouTube’s internal APIs.
 
+## Question 2: Handling YouTube Limit
+When crawling YouTube, you might encounter challenges such as rate limits and CAPTCHAs. We can handle these by:
+
+1. Throttling and Retries
+   - Throttle Requests: Introduce delays between requests to manage load such as "sleep: parameter or "comments_limt" variable
+   - Exponential Backoff: Retry failed requests with increasing delay intervals.
+
+2. Consent Handling
+   - Automated Consent: Manage consent requests as shown in the `YoutubeCrawler` class by starting a new session such as new_session()
+
+3. Proxy Usage
+   - IP Rotation: Use rotating proxies to distribute requests across different IP addresses to avoid being blocked.
+
+4. Avoid Detection
+   - Randomize User-Agent: Use various User-Agent strings for requests to avoid detection patterns.
+   - Simulate Human Behavior: Mimic natural browsing patterns with randomized request intervals and interactions/contexts.
+
+5. YouTube API
+   - YouTube Data API: Use the official YouTube Data API for structured access to video details, comments, and more (https://developers.google.com/youtube/v3)
+     
 ## Setup Instructions
 
 1. **Ensure Python 3.8 is Installed**
@@ -15,8 +35,8 @@ The core functionality for crawling YouTube data is encapsulated in the `Youtube
 2. **Clone the Repository**
 
     ```bash
-    git clone <repository-url>
-    cd <repository-directory>
+    git clone https://github.com/tuanhcmut/youtube-crawler.git
+    cd youtube-crawler
     ```
 
 3. **Install Required Packages**
