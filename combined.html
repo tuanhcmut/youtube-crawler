@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=UTF-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Video Crawler</title>
+<link rel=stylesheet href=https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css>
+<link href=https://cdn.datatables.net/v/dt/jqc-3.7.0/dt-1.13.4/b-2.4.1/b-colvis-2.4.1/fh-4.0.1/r-2.4.1/rg-1.5.0/datatables.min.css rel=stylesheet>
+<script src=https://cdn.datatables.net/v/dt/jqc-3.7.0/dt-1.13.4/b-2.4.1/b-colvis-2.4.1/fh-4.0.1/r-2.4.1/rg-1.5.0/datatables.min.js></script>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;background-color:#f4f4f9;color:#333}.container{width:90%;max-width:1200px;margin:0 auto;padding:20px}header{text-align:center;margin-bottom:20px}header h1{color:#333}footer{text-align:center;margin-top:20px;font-size:.9em;color:#777}.form-section{margin-bottom:30px}.form-section h2{margin-bottom:10px;color:#007bff}.form-group{margin-bottom:15px}.form-group label{display:block;margin-bottom:5px;color:#333}input[type=number],textarea{width:100%;padding:10px;border:1px solid #ddd;border-radius:5px}textarea{resize:vertical}button{padding:10px 15px;background-color:#007bff;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:16px}button:hover{background-color:#0056b3}.table-section{margin-top:20px}.table-section h2{margin-bottom:10px;color:#007bff}table{width:100%;border-collapse:collapse;margin-bottom:20px;background-color:#fff;border-radius:8px;overflow:hidden;box-shadow:0 0 10px rgba(0,0,0,.1)}thead{background-color:#007bff;color:#fff}thead th{padding:15px;text-align:left}tbody td{padding:15px;border-bottom:1px solid #ddd}tbody tr:nth-child(2n){background-color:#f9f9f9}tbody tr:last-child td{border-bottom:none}@media (max-width:768px){table{font-size:14px}tbody td,thead th{padding:10px}}</style>
+</head>
+<body>
+<div class=container>
+<header>
+<h1>Video Crawler Tracker</h1>
+</header>
+<main>
+<section class=form-section>
+<h2>Server URL</h2>
+<form id=url-form>
+<div class=form-group>
+<label for=server-url>Server URL (WITHOUT ROUTE):</label>
+<input id=server-url value=http://127.0.0.1:8000 placeholder=http://127.0.0.1:8000>
+</div>
+<button type=submit>Save URL</button>
+</form>
+</section>
+<section class=form-section id=add-videos>
+<h2>Add Videos</h2>
+<form id=video-form>
+<div class=form-group>
+<label for=video-urls>Video URLs (one per line):</label>
+<textarea id=video-urls rows=10 placeholder="Enter video URLs here..."></textarea>
+</div>
+<div class=form-group>
+<label for=limit>Comments limit (default 1000)</label>
+<input type=number id=limit name=limit value=1000 min=0>
+</div>
+<button type=submit>Start</button>
+</form>
+</section>
+<section class=table-section>
+<h2>Pending Videos</h2>
+<div id=table-container>
+<table id=myTable></table>
+</div>
+</section>
+</main>
+<footer>
+<p>&copy; By Tuan</p>
+</footer>
+</div>
+<script>let serverUrl="http://127.0.0.1:8000";const urlInput=document.getElementById("server-url"),urlForm=document.getElementById("url-form"),videoUrlsInput=document.getElementById("video-urls"),limit=document.getElementById("limit"),savedUrl=localStorage.getItem("serverUrl");savedUrl&&(serverUrl=savedUrl,urlInput.value=serverUrl),urlForm.addEventListener("submit",(e=>{e.preventDefault();const t=urlInput.value.trim();t?(serverUrl=t,localStorage.setItem("serverUrl",serverUrl),alert("Server URL saved!")):alert("Please enter a valid URL.")}));const videoForm=document.getElementById("video-form");videoForm.addEventListener("submit",(async e=>{e.preventDefault();const t=videoUrlsInput.value.trim();let r=[];try{if(r=JSON.parse(t),!Array.isArray(r)||!r.every((e=>"string"==typeof e&&e.trim().length>0)))throw"Not valid json. Auto treat at text lines"}catch(e){r=t.split("\n").map((e=>e.trim())).filter((e=>e.length>0))}if(r.length>0){try{const e=await fetch(`${serverUrl}/crawl?limit=`+limit.value,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(r)});e.ok||alert("Network response was not ok");await e.json()?alert("Videos are now being crawed!"):alert("There may be pending tasks, cannot crawl")}catch(e){console.error("Error:",e),alert("There was a problem with the request.")}videoUrlsInput.value=""}else alert("Please enter at least one video URL.")}));let columns=[{title:"Video",data:"details.title",defaultContent:"Pending"},{title:"Comments",data:"_comments",defaultContent:"Pending",render:function(e,t,r){return r.hasOwnProperty("comments")?"Done: "+r.comments:0==e?"Downloading":"Downloading "+e}},{title:"Captions",data:"_captions",defaultContent:"Pending",render:function(e,t,r){return r.hasOwnProperty("captions")?"Done: "+r.captions:0==e?"Downloading":"Downloading "+e}},{title:"Status",data:"status",defaultContent:"In progress"}];data=[];var is_fetching=!0;function fetchData(){fetch(serverUrl+"/status",{method:"GET",redirect:"manual"}).then((e=>e.json())).then((e=>{Array.isArray(e)&&table.clear().rows.add(e).draw(!1),setTimeout(fetchData,2024)})).catch((e=>{console.log(e),setTimeout(fetchData,1024)}))}table=$("#myTable").DataTable({stateSave:!0,responsive:!0,buttons:["colvis"],dom:"Bflpi<t>pl",data:data,columns:columns,searching:!0}),fetchData()</script>
+</body>
+</html>
