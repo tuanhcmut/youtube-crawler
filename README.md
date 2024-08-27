@@ -56,6 +56,7 @@ When crawling YouTube, you might encounter challenges such as rate limits and CA
     The application will be available at `http://127.0.0.1:8000`.
    
 6. **Modifying url list to crawl**
+   
    You can set the urls list once the current crawling task is done at frontend by accessing the tracking page located at `http://127.0.0.1`
    At backend we will be modifying the `urls` global variable located in the `crawl.py` file and then we call `start_crawling(urls)` to do the work
    
