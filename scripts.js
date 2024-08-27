@@ -13,7 +13,9 @@ if (savedUrl) {
 // Handle the server URL form submission
 urlForm.addEventListener('submit', (event) => {
     event.preventDefault(); // Prevent form from submitting the traditional way
-    const newUrl = urlInput.value.trim();
+    var newUrl = urlInput.value.trim();
+    if (newUrl.endsWith("/")) newUrl=newUrl.slice(0, -1); 
+    
     if (newUrl) {
         // Update the global variable
         serverUrl = newUrl;
