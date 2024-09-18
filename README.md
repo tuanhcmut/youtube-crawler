@@ -1,4 +1,4 @@
-# YouTube Data Crawler API
+# [GHOSTED] YouTube Data Crawler API
 
 ## Project Overview
 
@@ -6,7 +6,7 @@ The YouTube Data Crawler API is a FastAPI application designed to interact with 
 
 The core functionality for crawling YouTube data is encapsulated in the `YoutubeCrawler` class, located in `crawler.py`. This class handles the retrieval of video details, captions, and comments using YouTube’s internal APIs.
 
-## Question 2: Handling YouTube Limit
+##Handling YouTube Limit
 When crawling YouTube, you might encounter challenges such as rate limits and CAPTCHAs. We can handle these by:
 
 1. Throttling and Retries
