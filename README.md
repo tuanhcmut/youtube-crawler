@@ -1,4 +1,4 @@
-# [GHOSTED] YouTube Data Crawler API
+# [REJECTED] YouTube Data Crawler API
 
 ## Project Overview
 
